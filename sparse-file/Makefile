@@ -1,7 +1,8 @@
 CC = gcc
+CFLAGS = -Wall -Wextra
 
 compile: sparse.c
-	$(CC) -o sparse $<
+	$(CC) $(CFLAGS) -o sparse $<
 
 clean:
 	rm -f sparse fileA fileB fileC fileD *.gz result.txt
