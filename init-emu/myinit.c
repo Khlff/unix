@@ -14,7 +14,6 @@
 #define MAX_CMD_LEN 1024
 #define LOG_FILE "/tmp/myinit.log"
 
-// Структура для хранения информации о дочернем процессе
 typedef struct {
     pid_t pid;
     char cmd[MAX_CMD_LEN];
@@ -22,14 +21,12 @@ typedef struct {
     char stdout_file[MAX_CMD_LEN];
 } child_process_t;
 
-// Глобальные переменные
 child_process_t children[MAX_PROCESSES];
 int num_children = 0;
 char config_file[MAX_CMD_LEN];
-int log_fd; // Файловый дескриптор для лог-файла
+int log_fd;
 volatile sig_atomic_t received_sighup = 0;
 
-// Функция для записи в лог
 void log_message(const char *message) {
     time_t now;
     char time_str[64];
@@ -42,17 +39,14 @@ void log_message(const char *message) {
     write(log_fd, buffer, strlen(buffer));
 }
 
-// Функция для проверки, является ли путь абсолютным
 int is_absolute_path(const char *path) {
     return path[0] == '/';
 }
 
-// Обработчик сигнала SIGHUP
 void sighup_handler(int signo) {
     received_sighup = 1;
 }
 
-// Функция для демонизации процесса
 void daemonize() {
     pid_t pid, sid;
     int i;
@@ -108,53 +102,54 @@ void daemonize() {
     }
 }
 
-// Разбор строки конфигурационного файла
 int parse_config_line(char *line, char *cmd, char *stdin_file, char *stdout_file) {
     char *saveptr;
     char *token;
+    char *tokens[MAX_CMD_LEN / 2];
+    int token_count = 0;
 
-    // Удаляем символ новой строки
     size_t len = strlen(line);
     if (len > 0 && line[len-1] == '\n')
         line[len-1] = '\0';
 
-    // Первый токен - команда с аргументами
     token = strtok_r(line, " \t", &saveptr);
-    if (!token || !is_absolute_path(token))
+    while (token != NULL && token_count < (MAX_CMD_LEN / 2)) {
+        tokens[token_count++] = token;
+        token = strtok_r(NULL, " \t", &saveptr);
+    }
+
+    if (token_count < 3)
         return 0;
 
-    strcpy(cmd, token);
-
-    // Второй токен - stdin файл
-    token = strtok_r(NULL, " \t", &saveptr);
-    if (!token || !is_absolute_path(token))
+    if (!is_absolute_path(tokens[token_count-2]) || !is_absolute_path(tokens[token_count-1]))
         return 0;
 
-    strcpy(stdin_file, token);
-
-    // Третий токен - stdout файл
-    token = strtok_r(NULL, " \t", &saveptr);
-    if (!token || !is_absolute_path(token))
+    if (!is_absolute_path(tokens[0]))
         return 0;
 
-    strcpy(stdout_file, token);
+    // Собираем команду с аргументами
+    strcpy(cmd, tokens[0]);
+    for (int i = 1; i < token_count - 2; i++) {
+        strcat(cmd, " ");
+        strcat(cmd, tokens[i]);
+    }
+
+    strcpy(stdin_file, tokens[token_count-2]);
+    strcpy(stdout_file, tokens[token_count-1]);
 
     return 1;
 }
 
-// Функция запуска процесса с перенаправлением stdin, stdout и stderr
-int start_process(const char *command, const char *stdin_file, const char *stdout_file, const char *stderr_file) {
+pid_t start_process(const char *command, const char *stdin_file, const char *stdout_file, const char *stderr_file) {
     char log_buffer[MAX_CMD_LEN * 2];
     char cmd_copy[MAX_CMD_LEN];
     char *argv[MAX_CMD_LEN / 2];
     char *token, *saveptr;
     int argc = 0;
 
-    // Копируем строку, так как strtok_r изменяет её
     strncpy(cmd_copy, command, MAX_CMD_LEN - 1);
     cmd_copy[MAX_CMD_LEN - 1] = '\0';
 
-    // Разбиваем команду на аргументы
     token = strtok_r(cmd_copy, " \t", &saveptr);
     while (token != NULL && argc < (MAX_CMD_LEN / 2) - 1) {
         argv[argc++] = token;
@@ -163,24 +158,20 @@ int start_process(const char *command, const char *stdin_file, const char *stdou
     argv[argc] = NULL;
 
     if (argc == 0) {
-        snprintf(log_buffer, sizeof(log_buffer), "Некорректная команда: %s", command);
+        snprintf(log_buffer, sizeof(log_buffer), "Incorrect command: %s", command);
         log_message(log_buffer);
         return -1;
     }
 
-    // Создаем дочерний процесс
     pid_t pid = fork();
 
     if (pid < 0) {
-        snprintf(log_buffer, sizeof(log_buffer), "Ошибка при создании процесса для команды: %s", command);
+        snprintf(log_buffer, sizeof(log_buffer), "Failed to create proccess for command: %s", command);
         log_message(log_buffer);
         return -1;
     }
 
     if (pid == 0) {
-        // Дочерний процесс
-
-        // Перенаправляем stdin
         int fd_in = open(stdin_file, O_RDONLY);
         if (fd_in < 0) {
             perror("open stdin");
@@ -189,7 +180,6 @@ int start_process(const char *command, const char *stdin_file, const char *stdou
         dup2(fd_in, STDIN_FILENO);
         close(fd_in);
 
-        // Перенаправляем stdout
         int fd_out = open(stdout_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd_out < 0) {
             perror("open stdout");
@@ -198,7 +188,6 @@ int start_process(const char *command, const char *stdin_file, const char *stdou
         dup2(fd_out, STDOUT_FILENO);
         close(fd_out);
 
-        // Перенаправляем stderr
         int fd_err = open(stderr_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd_err < 0) {
             perror("open stderr");
@@ -207,10 +196,8 @@ int start_process(const char *command, const char *stdin_file, const char *stdou
         dup2(fd_err, STDERR_FILENO);
         close(fd_err);
 
-        // Выполняем команду
         execvp(argv[0], argv);
 
-        // Если execvp вернулся, значит произошла ошибка
         perror("execvp");
         exit(EXIT_FAILURE);
     }
@@ -223,50 +210,73 @@ int start_process(const char *command, const char *stdin_file, const char *stdou
         strncpy(children[num_children].stdout_file, stdout_file, MAX_CMD_LEN - 1);
         num_children++;
 
-        snprintf(log_buffer, sizeof(log_buffer), "Запущен процесс [PID=%d]: %s", pid, command);
+        snprintf(log_buffer, sizeof(log_buffer), "Proccess running [PID=%d]: %s", pid, command);
         log_message(log_buffer);
-        return 0;
+        return pid;
     } else {
-        log_message("Достигнуто максимальное количество процессов");
+        log_message("PROCCESS COUNT LIMIT REACHED");
         kill(pid, SIGTERM);
         return -1;
     }
 }
 
+pid_t spawn_process(int index) {
+    if (index < 0 || index >= num_children) {
+        char log_buffer[MAX_CMD_LEN];
+        snprintf(log_buffer, sizeof(log_buffer), "Failed to spawn proccess: invalid proccess index: %d", index);
+        log_message(log_buffer);
+        return -1;
+    }
+
+    return start_process(
+        children[index].cmd,
+        children[index].stdin_file,
+        children[index].stdout_file,
+        children[index].stdout_file
+    );
+}
+
 void reap_children() {
     int status;
     pid_t pid;
+    char log_buffer[MAX_CMD_LEN * 2];
 
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         for (int i = 0; i < num_children; i++) {
             if (children[i].pid == pid) {
-                // Логируем завершение процесса
                 if (WIFEXITED(status)) {
-                    log_message("Процесс %d завершился с кодом %d: %s",
-                                pid, WEXITSTATUS(status), children[i].cmd);
+                    snprintf(log_buffer, sizeof(log_buffer),
+                        "Proccess [PID=%d] exited with code= %d: %s",
+                        pid, WEXITSTATUS(status), children[i].cmd);
+                    log_message(log_buffer);
                 } else if (WIFSIGNALED(status)) {
-                    log_message("Процесс %d завершен сигналом %d: %s",
-                                pid, WTERMSIG(status), children[i].cmd);
+                    snprintf(log_buffer, sizeof(log_buffer),
+                        "Proccess [PID=%d] closed by signal= %d: %s",
+                        pid, WTERMSIG(status), children[i].cmd);
+                    log_message(log_buffer);
                 }
 
-                // Важно! Не перезапускаем процесс, если получен SIGHUP
+                // Не перезапускаем процесс, если получен SIGHUP
                 if (!received_sighup) {
-                    // Запускаем процесс заново только если он не был остановлен
-                    // в результате обработки SIGHUP
                     pid_t new_pid = spawn_process(i);
                     if (new_pid > 0) {
                         children[i].pid = new_pid;
-                        log_message("Процесс перезапущен [PID=%d]: %s",
-                                   new_pid, children[i].cmd);
+                        snprintf(log_buffer, sizeof(log_buffer),
+                            "Proccess restarted [PID=%d]: %s",
+                            new_pid, children[i].cmd);
+                        log_message(log_buffer);
                     } else {
-                        log_message("Ошибка при перезапуске процесса: %s",
-                                   children[i].cmd);
+                        snprintf(log_buffer, sizeof(log_buffer),
+                            "Failed to restart proccess: %s",
+                            children[i].cmd);
+                        log_message(log_buffer);
                     }
                 } else {
-                    // Если получен SIGHUP, отмечаем процесс как остановленный
                     children[i].pid = 0;
-                    log_message("Процесс остановлен и не будет перезапущен (SIGHUP): %s",
-                               children[i].cmd);
+                    snprintf(log_buffer, sizeof(log_buffer),
+                        "Proccess has been stopped and will not start (SIGHUP): %s",
+                        children[i].cmd);
+                    log_message(log_buffer);
                 }
                 break;
             }
@@ -274,7 +284,6 @@ void reap_children() {
     }
 }
 
-// Функция чтения и применения конфигурационного файла
 void read_config() {
     FILE *fp;
     char line[MAX_CMD_LEN];
@@ -283,25 +292,25 @@ void read_config() {
     char stdout_file[MAX_CMD_LEN];
     char log_buffer[MAX_CMD_LEN * 2];
 
-    snprintf(log_buffer, sizeof(log_buffer), "Чтение конфигурационного файла: %s", config_file);
+    snprintf(log_buffer, sizeof(log_buffer), "Read config file: %s", config_file);
     log_message(log_buffer);
 
     fp = fopen(config_file, "r");
     if (!fp) {
-        snprintf(log_buffer, sizeof(log_buffer), "Ошибка открытия конфигурационного файла: %s", config_file);
+        snprintf(log_buffer, sizeof(log_buffer), "Failed to open config file: %s", config_file);
         log_message(log_buffer);
         return;
     }
 
     while (fgets(line, sizeof(line), fp)) {
         if (line[0] == '#' || line[0] == '\n') {
-            continue; // Пропускаем комментарии и пустые строки
+            continue;
         }
 
         if (parse_config_line(line, cmd, stdin_file, stdout_file)) {
             start_process(cmd, stdin_file, stdout_file, stdout_file);
         } else {
-            snprintf(log_buffer, sizeof(log_buffer), "Некорректная строка в конфигурационном файле: %s", line);
+            snprintf(log_buffer, sizeof(log_buffer), "Inccorect string in config: %s", line);
             log_message(log_buffer);
         }
     }
@@ -310,58 +319,45 @@ void read_config() {
 }
 
 int main(int argc, char *argv[]) {
-    // Проверяем аргументы командной строки
-    if (argc != 2) {
-        fprintf(stderr, "Использование: %s <config_file>\n", argv[0]);
-        return EXIT_FAILURE;
-    }
-
-    // Копируем путь к конфигурационному файлу
     strncpy(config_file, argv[1], MAX_CMD_LEN - 1);
+    config_file[MAX_CMD_LEN - 1] = '\0';
 
-    // Демонизация
     daemonize();
 
-    log_message("Демон myinit запущен");
+    log_message("Daemon myinit has been started");
 
-    // Устанавливаем обработчик сигнала SIGHUP
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = sighup_handler;
     sigaction(SIGHUP, &sa, NULL);
 
-    // Первоначальное чтение конфигурации
+    signal(SIGCHLD, SIG_DFL);
+
     read_config();
 
-    // Основной цикл демона
     while (1) {
-        // Обрабатываем перезагрузку конфигурации при получении SIGHUP
         if (received_sighup) {
-            log_message("Получен сигнал SIGHUP, перечитываем конфигурацию");
-            received_sighup = 0;
+            log_message("Received SIGHUP signal, rereading config");
 
-            // Завершаем все дочерние процессы
             for (int i = 0; i < num_children; i++) {
-                kill(children[i].pid, SIGTERM);
+                if (children[i].pid > 0) {
+                    kill(children[i].pid, SIGTERM);
+                }
             }
 
-            // Ждем некоторое время, чтобы процессы завершились
             sleep(2);
 
-            // Проверяем завершение процессов
             reap_children();
 
-            // Сбрасываем счетчик процессов
             num_children = 0;
 
-            // Перечитываем конфигурацию
             read_config();
+
+            received_sighup = 0;
         }
 
-        // Обрабатываем завершение дочерних процессов
         reap_children();
 
-        // Спим, чтобы не нагружать систему
         sleep(1);
     }
 
