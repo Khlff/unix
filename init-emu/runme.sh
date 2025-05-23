@@ -20,6 +20,7 @@ create_test_env() {
 
     mkdir -p test_dir/input
     mkdir -p test_dir/output
+    echo "test input data" > test_dir/input/input.txt
 
     # Создаем конфигурационный файл с тремя процессами
     cat > config.txt << EOF
